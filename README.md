@@ -52,7 +52,7 @@
 
 ```bash pip install pywin32 ```
 
-3. [Ubuntu Server 22.04 LTS](https://ubuntu.com/download/server)
+2. [Ubuntu Server 22.04 LTS](https://ubuntu.com/download/server)
 
 ### Первые шаги
 ```bash
