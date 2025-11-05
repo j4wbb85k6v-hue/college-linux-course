@@ -29,7 +29,26 @@
 
 ### Необходимое ПО
 1. [VirtualBox](https://www.virtualbox.org/wiki/Download_Old_Builds_7_2) (Выбирать установщик по вашей ОС)
-2. [Ubuntu Server 22.04 LTS](https://ubuntu.com/download/server)
+
+1.1 Для Windows: В случае предупреждения отсутствия зависимостей Python Core и win32api, не стесняемся качать [Python](https://www.python.org/downloads/) и после выписывать в терминал
+
+```bash pip install pywin32 ```
+
+1.2 Для Linux: В некоторых дистрибутивах(например, в Ubuntu) Python может быть установлен по умолчанию. 
+
+Для проверки версии Python в терминале надо выполнить следующую команду ```bash python3 --version. ```
+
+Если Python установлен, то она отобразит версию интерпретатора.
+
+Однако даже если Python установлен, его версия может быть не самой последней. Для установки последней доступной версии Python выполним следующую команду:
+
+```bash sudo apt-get update && sudo apt-get install python3```
+
+Если надо установить не последнюю доступную, а какую-то определенную версию, то указывается также подверсия Python. Например, установка версии Python 3.10:
+
+```bash sudo apt-get install python3.(номер версии 10, 11 и т.п.) ```
+
+3. [Ubuntu Server 22.04 LTS](https://ubuntu.com/download/server)
 
 ### Первые шаги
 ```bash
