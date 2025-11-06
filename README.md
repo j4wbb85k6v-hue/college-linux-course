@@ -8,7 +8,7 @@
 
 **Практический курс для будущих системных администраторов**
 
-[📚 Документация](https://github.com/virusneo1997-del/college-linux-course/tree/main/docs/faq) • [🚀 Быстрый старт](https://github.com/virusneo1997-del/college-linux-course/blob/main/README.md#-%D0%B1%D1%8B%D1%81%D1%82%D1%80%D1%8B%D0%B9-%D1%81%D1%82%D0%B0%D1%80%D1%82) • [📋 Уроки](https://github.com/virusneo1997-del/college-linux-course/tree/main/lessons) • [👨‍🏫 Преподаватель](#преподаватель)
+[📚 Документация](https://github.com/virusneo1997-del/college-linux-course/tree/main/docs/faq) • [🚀 Быстрый старт](https://github.com/virusneo1997-del/college-linux-course/blob/main/README.md#-%D0%B1%D1%8B%D1%81%D1%82%D1%80%D1%8B%D0%B9-%D1%81%D1%82%D0%B0%D1%80%D1%82) • [📋 Уроки](https://github.com/virusneo1997-del/college-linux-course/tree/main/lessons) • [👨‍🏫 Преподаватель](https://github.com/virusneo1997-del/college-linux-course/blob/main/README.md#%E2%80%8D-%D0%BF%D1%80%D0%B5%D0%BF%D0%BE%D0%B4%D0%B0%D0%B2%D0%B0%D1%82%D0%B5%D0%BB%D1%8C)
 
 </div>
 
