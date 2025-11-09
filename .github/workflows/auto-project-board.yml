@@ -17,7 +17,7 @@ jobs:
       - name: 🎯 Автоматическое обновление карточек
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             console.log('=== 🚀 ЗАПУСК АВТОМАТИЗАЦИИ ===');
             
@@ -54,7 +54,7 @@ jobs:
               
             } catch (error) {
               console.error('💥 Ошибка при поиске проектов:', error.message);
-              console.log('🔧 Проверьте: USER_LOGIN и права доступа PAT');
+              console.log('🔧 Проверьте: USER_LOGIN и права доступа токена');
               return;
             }
             
