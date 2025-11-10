@@ -1,71 +1,112 @@
-name: 🔄 Auto Project Board Sync
+name: 🚀 Auto Project Board Sync
 
 on:
   issues:
     types: [opened, reopened, closed]
   pull_request:
-    types: [opened, reopened, ready_for_review, closed]
+    types: [opened, reopened, ready_for_review, closed, converted_to_draft]
   workflow_dispatch:
 
 permissions:
   contents: read
   issues: write
   pull-requests: write
-  project: write
+  repository-projects: write
+
+env:
+  PROJECT_NAME: "Автоматизация курсов"
+  USER_LOGIN: "virusneo1997-del"
 
 jobs:
   sync-project:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 🛠️ Checkout repository
+      - name: 🧩 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🤖 Auto update Project Board
+      - name: 🤖 Sync Pull Request with Project Board
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
-            console.log("=== 🚀 ЗАПУСК АВТОМАТИЗАЦИИ ПРОЕКТА ===");
+            console.log('=== 🚀 ЗАПУСК АВТОМАТИЗАЦИИ ===');
 
-            const item = context.payload.issue || context.payload.pull_request;
-            if (!item) {
-              console.log("⚠️ Не найден issue или PR — выходим.");
-              return;
-            }
-
-            const projectName = "Автоматизация курсов";
-
-            // === 1️⃣ Получаем список проектов пользователя ===
-            const projects = await github.graphql(`
-              query {
-                viewer {
+            try {
+              // === 1. Получаем проект по имени ===
+              const projectsQuery = `query($login: String!) {
+                user(login: $login) {
                   projectsV2(first: 20) {
                     nodes {
                       id
                       title
-                      number
+                      url
                     }
                   }
                 }
+              }`;
+
+              const result = await github.graphql(projectsQuery, { login: process.env.USER_LOGIN });
+              const projects = result.user.projectsV2.nodes;
+              const project = projects.find(p => p.title === process.env.PROJECT_NAME);
+
+              if (!project) {
+                console.log(`❌ Проект "${process.env.PROJECT_NAME}" не найден!`);
+                console.log("📋 Найдены проекты:", projects.map(p => p.title));
+                return;
               }
-            `);
 
-            const project = projects.viewer.projectsV2.nodes.find(p => p.title === projectName);
-            if (!project) {
-              console.log(`❌ Проект "${projectName}" не найден.`);
-              return;
-            }
+              console.log(`🎯 Найден проект: ${project.title}`);
+              console.log(`🔗 ${project.url}`);
+              const projectId = project.id;
 
-            console.log(`✅ Найден проект "${project.title}" (ID: ${project.id})`);
+              // === 2. Данные PR ===
+              const { pull_request } = context.payload;
+              if (!pull_request) {
+                console.log("❌ Нет информации о pull request");
+                return;
+              }
 
-            // === 2️⃣ Проверяем поля проекта ===
-            const projectDetails = await github.graphql(`
-              query($id: ID!) {
-                node(id: $id) {
+              const author = pull_request.user.login;
+              const action = context.payload.action;
+              const merged = pull_request.merged;
+              const isDraft = pull_request.draft;
+              console.log(`👤 Автор: ${author}, действие: ${action}, merged=${merged}, draft=${isDraft}`);
+
+              // === 3. Определяем статус ===
+              let newStatus = null;
+              switch (action) {
+                case "opened":
+                  newStatus = isDraft ? "To do" : "In Progress";
+                  break;
+                case "reopened":
+                  newStatus = "To do";
+                  break;
+                case "ready_for_review":
+                  newStatus = "In Review";
+                  break;
+                case "converted_to_draft":
+                  newStatus = "To do";
+                  break;
+                case "closed":
+                  newStatus = merged ? "Done" : "To do";
+                  break;
+                default:
+                  console.log(`ℹ️ Необрабатываемое действие: ${action}`);
+                  return;
+              }
+              console.log(`🎯 Новый статус: ${newStatus}`);
+
+              // === 4. Получаем структуру проекта ===
+              const projectDetailsQuery = `query($projectId: ID!) {
+                node(id: $projectId) {
                   ... on ProjectV2 {
-                    fields(first: 50) {
+                    fields(first: 20) {
                       nodes {
-                        ... on ProjectV2FieldCommon { id name }
+                        ... on ProjectV2Field {
+                          id
+                          name
+                        }
                         ... on ProjectV2SingleSelectField {
                           id
                           name
@@ -73,155 +114,90 @@ jobs:
                         }
                       }
                     }
-                  }
-                }
-              }
-            `, { id: project.id });
-
-            let fields = projectDetails.node.fields.nodes;
-            let statusField = fields.find(f => f.name === "Status" && f.options);
-
-            // === 3️⃣ Если поля Status нет — создаём его ===
-            if (!statusField) {
-              console.log("⚙️ Поле 'Status' не найдено. Создаём новое...");
-
-              const createFieldMutation = `
-                mutation($input: CreateProjectV2FieldInput!) {
-                  createProjectV2Field(input: $input) {
-                    projectV2Field {
-                      id
-                      name
-                    }
-                  }
-                }
-              `;
-
-              const createRes = await github.graphql(createFieldMutation, {
-                input: {
-                  projectId: project.id,
-                  dataType: "SINGLE_SELECT",
-                  name: "Status"
-                }
-              });
-
-              const newFieldId = createRes.createProjectV2Field.projectV2Field.id;
-              console.log(`✅ Создано поле Status (ID: ${newFieldId})`);
-
-              // Добавляем опции к полю
-              const addOptionMutation = `
-                mutation($input: CreateProjectV2SingleSelectFieldOptionInput!) {
-                  createProjectV2SingleSelectFieldOption(input: $input) {
-                    projectV2SingleSelectFieldOption { id name }
-                  }
-                }
-              `;
-
-              const options = ["To do", "In progress", "In review", "Done"];
-              for (const name of options) {
-                await github.graphql(addOptionMutation, {
-                  input: { fieldId: newFieldId, name }
-                });
-                console.log(`➕ Добавлена опция: ${name}`);
-              }
-
-              // Обновляем поля проекта после создания
-              const updated = await github.graphql(`
-                query($id: ID!) {
-                  node(id: $id) {
-                    ... on ProjectV2 {
-                      fields(first: 50) {
-                        nodes {
-                          ... on ProjectV2SingleSelectField {
-                            id
-                            name
-                            options { id name }
+                    items(first: 50) {
+                      nodes {
+                        id
+                        fieldValues(first: 10) {
+                          nodes {
+                            ... on ProjectV2ItemFieldTextValue {
+                              field { ... on ProjectV2FieldCommon { name } }
+                              text
+                            }
                           }
                         }
                       }
                     }
                   }
                 }
-              `, { id: project.id });
+              }`;
 
-              fields = updated.node.fields.nodes;
-              statusField = fields.find(f => f.name === "Status");
-            }
+              const details = await github.graphql(projectDetailsQuery, { projectId });
+              const fields = details.node.fields.nodes;
+              const items = details.node.items.nodes;
 
-            console.log(`📋 Поле 'Status' найдено (ID: ${statusField.id})`);
-            console.log(`📋 Доступные статусы: ${statusField.options.map(o => o.name).join(", ")}`);
-
-            // === 4️⃣ Добавляем элемент в проект ===
-            const addItemMutation = `
-              mutation($projectId: ID!, $contentId: ID!) {
-                addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
-                  item { id }
-                }
+              // === 5. Находим поле "Status" ===
+              const statusField = fields.find(f => f.name === "Status" && f.options);
+              if (!statusField) {
+                console.log("❌ Поле Status не найдено!");
+                console.log("Доступные поля:", fields.map(f => f.name));
+                return;
               }
-            `;
 
-            let itemId = null;
-            try {
-              const res = await github.graphql(addItemMutation, {
-                projectId: project.id,
-                contentId: item.node_id,
+              const statusOption = statusField.options.find(o => o.name === newStatus);
+              if (!statusOption) {
+                console.log(`❌ Статус "${newStatus}" не найден среди опций поля Status`);
+                return;
+              }
+
+              // === 6. Проверяем, есть ли карточка PR в проекте ===
+              let item = items.find(i => {
+                const f = i.fieldValues.nodes.find(f => f.text === author);
+                return f;
               });
-              itemId = res.addProjectV2ItemById.item.id;
-              console.log(`✅ Элемент добавлен в проект: ${itemId}`);
-            } catch (err) {
-              console.log(`⚠️ Ошибка при добавлении элемента: ${err.message}`);
-              if (err.message.includes("already exists")) {
-                console.log("ℹ️ Элемент уже существует, продолжаем обновление статуса.");
+
+              // === 7. Создаем карточку, если нет ===
+              if (!item) {
+                console.log(`🆕 Карточка для ${author} не найдена — создаем новую`);
+                const createItem = await github.graphql(`
+                  mutation($input: AddProjectV2ItemByIdInput!) {
+                    addProjectV2ItemById(input: $input) {
+                      item { id }
+                    }
+                  }`,
+                  {
+                    input: {
+                      projectId: projectId,
+                      contentId: pull_request.node_id
+                    }
+                  }
+                );
+                item = { id: createItem.addProjectV2ItemById.item.id };
+                console.log(`✅ Новая карточка создана: ${item.id}`);
+              } else {
+                console.log(`📎 Карточка уже существует: ${item.id}`);
               }
-            }
 
-            // === 5️⃣ Определяем статус ===
-            const action = context.payload.action;
-            const merged = item.merged || false;
-            let newStatus = "To do";
-
-            if (context.eventName === "pull_request") {
-              switch (action) {
-                case "opened": newStatus = "In progress"; break;
-                case "ready_for_review": newStatus = "In review"; break;
-                case "closed": newStatus = merged ? "Done" : "To do"; break;
-              }
-            } else if (context.eventName === "issues") {
-              switch (action) {
-                case "opened": newStatus = "To do"; break;
-                case "reopened": newStatus = "In progress"; break;
-                case "closed": newStatus = "Done"; break;
-              }
-            }
-
-            console.log(`🎯 Новый статус: ${newStatus}`);
-
-            const option = statusField.options.find(o => o.name.toLowerCase() === newStatus.toLowerCase());
-            if (!option) {
-              console.log(`❌ Не найдена опция "${newStatus}".`);
-              return;
-            }
-
-            // === 6️⃣ Обновляем статус элемента ===
-            const updateMutation = `
-              mutation($input: UpdateProjectV2ItemFieldValueInput!) {
-                updateProjectV2ItemFieldValue(input: $input) {
-                  projectV2Item { id }
+              // === 8. Обновляем статус ===
+              await github.graphql(`
+                mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+                  updateProjectV2ItemFieldValue(input: $input) {
+                    projectV2Item { id }
+                  }
+                }`,
+                {
+                  input: {
+                    projectId: projectId,
+                    itemId: item.id,
+                    fieldId: statusField.id,
+                    value: { singleSelectOptionId: statusOption.id }
+                  }
                 }
-              }
-            `;
+              );
 
-            try {
-              await github.graphql(updateMutation, {
-                input: {
-                  projectId: project.id,
-                  itemId,
-                  fieldId: statusField.id,
-                  value: { singleSelectOptionId: option.id }
-                }
-              });
-              console.log(`✅ Статус обновлён: ${newStatus}`);
+              console.log(`✅ Статус обновлён → ${newStatus}`);
+              console.log("=== 🏁 ЗАВЕРШЕНО ===");
+
             } catch (err) {
-              console.log(`💥 Ошибка при обновлении статуса: ${err.message}`);
+              console.error("💥 Ошибка:", err.message);
+              if (err.errors) console.log(JSON.stringify(err.errors, null, 2));
             }
-
-            console.log("=== 🏁 Завершено ===");
