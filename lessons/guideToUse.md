@@ -10,7 +10,7 @@
 
 ## Шаг 1: Скрыть активность
 
-✅ Make profile private and hide activity
+`✅ Make profile private and hide activity`
 
 ### Что это делает:
 
@@ -24,7 +24,7 @@
 
 ## Шаг 2: Включить приватные контрибуции
 
-✅ Include private contributions on my profile
+`✅ Include private contributions on my profile`
 
 ### Что это дает:
 
