@@ -1,4 +1,4 @@
-name: Auto Project Board (v2)
+name: Auto Project Board (v2) — robust
 
 on:
   pull_request_target:
@@ -18,71 +18,134 @@ jobs:
         with:
           github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
+            // Параметры проекта/колонок
             const projectNumber = 7;
             const columnName = "In review";
+            const ownerLogin = "virusneo1997-del";
 
-            // Получаем информацию о PR
+            // Надёжно получаем PR (REST)
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
+            const prNodeId = pr.node_id;
 
-            const prId = pr.node_id;
-
-            // Получаем ID проекта
-            const projectData = await github.graphql(`
+            // 1) Получаем projectV2 id
+            const projectQ = `
               query($login: String!, $number: Int!) {
                 user(login: $login) {
                   projectV2(number: $number) {
                     id
                   }
                 }
-              }`,
-              { login: "virusneo1997-del", number: projectNumber }
-            );
+              }`;
+            const projectResp = await github.graphql(projectQ, { login: ownerLogin, number: projectNumber });
+            const projectId = projectResp.user.projectV2.id;
+            if (!projectId) {
+              core.setFailed("Project v2 not found");
+              return;
+            }
 
-            const projectId = projectData.user.projectV2.id;
-
-            // Добавляем PR в проект
-            const addItemResult = await github.graphql(`
-              mutation($projectId: ID!, $contentId: ID!) {
-                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
-                  item { id }
-                }
-              }`,
-              { projectId, contentId: prId }
-            );
-
-            const itemId = addItemResult.addProjectV2ItemById.item.id;
-
-            // Получаем поле "Status"
-            const fieldData = await github.graphql(`
+            // 2) Получаем поля проекта (с фрагментами для конкретных типов) — исправляет ошибку union selection
+            const fieldsQ = `
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
-                    fields(first: 20) {
+                    fields(first: 100) {
                       nodes {
                         id
                         name
-                        options { id name }
+                        __typename
+                        ... on ProjectV2SingleSelectField {
+                          options(first: 200) {
+                            nodes {
+                              id
+                              name
+                            }
+                          }
+                        }
+                        ... on ProjectV2IterationField {
+                          iterations(first: 200) {
+                            nodes { id title }
+                          }
+                        }
+                        ... on ProjectV2TextField {
+                          # text field has no options
+                        }
+                        # при необходимости можно добавить другие фрагменты
+                      }
+                    }
+
+                    items(first: 200) {
+                      nodes {
+                        id
+                        content {
+                          __typename
+                          ... on PullRequest {
+                            number
+                            id
+                          }
+                        }
                       }
                     }
                   }
                 }
-              }`,
-              { projectId }
-            );
+              }`;
 
-            const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
-            const column = statusField?.options?.find(o => o.name === columnName);
-
-            if (!statusField || !column) {
-              core.setFailed(`❌ Не найдена колонка "${columnName}" в поле "Status"`);
+            const fieldsResp = await github.graphql(fieldsQ, { projectId });
+            const fieldsNode = fieldsResp.node;
+            if (!fieldsNode) {
+              core.setFailed("Failed to fetch project fields");
               return;
             }
 
-            // Меняем статус карточки
+            // Ищем поле "Status" (SingleSelect)
+            const fields = fieldsNode.fields.nodes;
+            const statusField = fields.find(f => f.name === "Status");
+            if (!statusField) {
+              core.setFailed('Field "Status" not found in project fields');
+              return;
+            }
+
+            if (statusField.__typename !== "ProjectV2SingleSelectField") {
+              core.setFailed('Field "Status" is not a SingleSelect field — workflow expects Status single-select field');
+              return;
+            }
+
+            // Ищем нужный option id по имени колонке
+            const optionNode = (statusField.options && statusField.options.nodes || []).find(o => o.name === columnName);
+            if (!optionNode) {
+              core.setFailed(`Option "${columnName}" not found in Status field options`);
+              return;
+            }
+
+            // 3) Добавляем PR в проект (если ещё нет)
+            let itemId = null;
+            try {
+              const addResp = await github.graphql(`
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                    item { id }
+                  }
+                }`, { projectId, contentId: prNodeId }
+              );
+              itemId = addResp.addProjectV2ItemById.item.id;
+            } catch (err) {
+              // Если добавление не удалось (например, элемент уже существует) — ищем существующий item среди items
+              core.info("addProjectV2ItemById failed, try to find existing item");
+              const items = fieldsResp.node.items.nodes || [];
+              const found = items.find(it => it.content && it.content.__typename === "PullRequest" && it.content.number === pr.number);
+              if (found) {
+                itemId = found.id;
+                core.info(`Found existing project item ${itemId} for PR #${pr.number}`);
+              } else {
+                core.setFailed("Failed to add or find project item for PR");
+                return;
+              }
+            }
+
+            // 4) Устанавливаем Status option для item (перемещаем в колонку)
             await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
@@ -90,17 +153,18 @@ jobs:
                   itemId: $itemId,
                   fieldId: $fieldId,
                   value: { singleSelectOptionId: $optionId }
-                }) { projectV2Item { id } }
-              }`,
-              {
+                }) {
+                  projectV2Item { id }
+                }
+              }`, {
                 projectId,
                 itemId,
                 fieldId: statusField.id,
-                optionId: column.id
+                optionId: optionNode.id
               }
             );
 
-            console.log("✅ PR добавлен в колонку 'In review'");
+            core.info(`PR #${pr.number} moved to "${columnName}" (item ${itemId})`);
 
       - name: Move to "To do" on close
         if: github.event.action == 'closed'
@@ -110,52 +174,73 @@ jobs:
           script: |
             const projectNumber = 7;
             const columnName = "To do";
+            const ownerLogin = "virusneo1997-del";
 
+            // Получаем PR REST и node id
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
-            const prId = pr.node_id;
+            const prNodeId = pr.node_id;
 
-            const projectData = await github.graphql(`
+            // Получаем project id
+            const projectQ = `
               query($login: String!, $number: Int!) {
                 user(login: $login) {
-                  projectV2(number: $number) {
-                    id
+                  projectV2(number: $number) { id
+                    items(first: 200) {
+                      nodes { id content { __typename ... on PullRequest { number id } } }
+                    }
                   }
                 }
-              }`,
-              { login: "virusneo1997-del", number: projectNumber }
-            );
+              }`;
+            const projectResp = await github.graphql(projectQ, { login: ownerLogin, number: projectNumber });
+            const projectNode = projectResp.user.projectV2;
+            if (!projectNode) {
+              core.setFailed("Project v2 not found");
+              return;
+            }
+            const projectId = projectNode.id;
 
-            const projectId = projectData.user.projectV2.id;
+            // Находим item, соответствующий PR по номеру
+            const items = projectNode.items.nodes || [];
+            const foundItem = items.find(i => i.content && i.content.__typename === "PullRequest" && i.content.number === pr.number);
+            if (!foundItem) {
+              core.info("Project item for PR not found — nothing to move");
+              return;
+            }
+            const itemId = foundItem.id;
 
-            const fieldData = await github.graphql(`
+            // Получаем fields/options как раньше
+            const fieldsQ = `
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
-                    fields(first: 20) {
+                    fields(first: 100) {
                       nodes {
-                        id
-                        name
-                        options { id name }
+                        id name __typename
+                        ... on ProjectV2SingleSelectField {
+                          options(first: 200) { nodes { id name } }
+                        }
                       }
                     }
                   }
                 }
-              }`,
-              { projectId }
-            );
-
-            const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
-            const column = statusField?.options?.find(o => o.name === columnName);
-
-            if (!statusField || !column) {
-              core.setFailed(`❌ Не найдена колонка "${columnName}" в поле "Status"`);
+              }`;
+            const fieldsResp = await github.graphql(fieldsQ, { projectId });
+            const statusField = fieldsResp.node.fields.nodes.find(f => f.name === "Status");
+            if (!statusField || statusField.__typename !== "ProjectV2SingleSelectField") {
+              core.setFailed('Field "Status" not found or not single-select');
+              return;
+            }
+            const optionNode = (statusField.options && statusField.options.nodes || []).find(o => o.name === columnName);
+            if (!optionNode) {
+              core.setFailed(`Option "${columnName}" not found`);
               return;
             }
 
+            // Устанавливаем значение
             await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
@@ -164,13 +249,12 @@ jobs:
                   fieldId: $fieldId,
                   value: { singleSelectOptionId: $optionId }
                 }) { projectV2Item { id } }
-              }`,
-              {
+              }`, {
                 projectId,
-                itemId: prId,
+                itemId,
                 fieldId: statusField.id,
-                optionId: column.id
+                optionId: optionNode.id
               }
             );
 
-            console.log("🔁 PR перемещён в 'To do'");
+            core.info(`PR #${pr.number} moved to "${columnName}"`);
